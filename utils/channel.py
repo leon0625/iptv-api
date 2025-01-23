@@ -601,7 +601,8 @@ async def process_sort_channel_list(data, ipv6=False, callback=None):
     """
     Process the sort channel list
     """
-    ipv6_proxy = None if (not config.open_ipv6 or ipv6) else constants.ipv6_proxy
+    # 关闭ipv6_proxy, leon
+    ipv6_proxy = None # if (not config.open_ipv6 or ipv6) else constants.ipv6_proxy
     open_filter_resolution = config.open_filter_resolution
     min_resolution = config.min_resolution_value
     get_resolution = open_filter_resolution and check_ffmpeg_installed_status()

@@ -82,6 +82,56 @@ def check_m3u8_valid(headers: CIMultiDictProxy[str] | dict[any, any]) -> bool:
     return any(item in content_type for item in ['application/vnd.apple.mpegurl', 'audio/mpegurl', 'audio/x-mpegurl'])
 
 
+import threading
+import traceback
+
+def run_with_timeout(func, args=(), kwargs={}, timeout_seconds=5):
+    """
+    使用线程运行函数，带超时控制
+    
+    Args:
+        func: 要执行的函数
+        args: 函数的位置参数，元组格式
+        kwargs: 函数的关键字参数，字典格式
+        timeout_seconds: 超时时间（秒）
+        
+    Returns:
+        函数返回值或None（如果超时）
+    """
+    result = [None]
+    finished = threading.Event()
+    
+    def worker():
+        try:
+            result[0] = func(*args, **kwargs)
+            finished.set()
+        except Exception as e:
+            finished.set()
+    
+    thread = threading.Thread(target=worker)
+    thread.daemon = True  # 设置为守护线程，主线程结束时会强制结束
+    thread.start()
+    
+    # 等待线程完成或超时
+    finished.wait(timeout_seconds)
+    if not finished.is_set():
+        return None
+        
+    return result[0]
+
+def load_m3u8_with_timeout(url, timeout=5):
+    """
+    带超时控制的m3u8加载函数
+    """
+    # m3u8.load可能一直阻塞不返回，它自身的超时不可用，所以这里实现另一种超时
+    result = run_with_timeout(
+        func=m3u8.load,
+        args=(url,),  # url作为位置参数传入
+        kwargs={},    # 如果有其他关键字参数可以放在这里
+        timeout_seconds=timeout
+    )
+    return result
+
 async def get_speed_m3u8(url: str, filter_resolution: bool = config.open_filter_resolution,
                          timeout: int = config.sort_timeout) -> dict[str, float | None]:
     """
@@ -96,35 +146,36 @@ async def get_speed_m3u8(url: str, filter_resolution: bool = config.open_filter_
             location = headers.get('Location')
             if location:
                 info.update(await get_speed_m3u8(location, filter_resolution, timeout))
-            elif check_m3u8_valid(headers):
-                m3u8_obj = m3u8.load(url, timeout=2)
-                playlists = m3u8_obj.data.get('playlists')
-                segments = m3u8_obj.segments
-                if not segments and playlists:
-                    parsed_url = urlparse(url)
-                    uri = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path.rsplit('/', 1)[0]}/{playlists[0].get('uri', '')}"
-                    uri_headers = await get_m3u8_headers(uri, session)
-                    if not check_m3u8_valid(uri_headers):
-                        if uri_headers.get('Content-Length'):
-                            info.update(await get_speed_with_download(uri, session, timeout))
-                        raise Exception("Invalid m3u8")
-                    m3u8_obj = m3u8.load(uri, timeout=2)
+            else:
+                m3u8_obj = load_m3u8_with_timeout(url, timeout=2)
+                if m3u8_obj is None:
+                    info.update(await get_speed_with_download(url, session, timeout))
+                else:
+                    playlists = m3u8_obj.data.get('playlists')
                     segments = m3u8_obj.segments
-                if not segments:
-                    raise Exception("Segments not found")
-                ts_urls = [segment.absolute_uri for segment in segments]
-                speed_list = []
-                start_time = time()
-                for ts_url in ts_urls:
-                    if time() - start_time > timeout:
-                        break
-                    download_info = await get_speed_with_download(ts_url, session, timeout)
-                    speed_list.append(download_info['speed'])
-                    if info['delay'] is None and download_info['delay'] is not None:
-                        info['delay'] = download_info['delay']
-                info['speed'] = (sum(speed_list) / len(speed_list)) if speed_list else 0
-            elif headers.get('Content-Length'):
-                info.update(await get_speed_with_download(url, session, timeout))
+                    if not segments and playlists:
+                        parsed_url = urlparse(url)
+                        uri = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path.rsplit('/', 1)[0]}/{playlists[0].get('uri', '')}"
+                        uri_headers = await get_m3u8_headers(uri, session)
+                        if not check_m3u8_valid(uri_headers):
+                            if uri_headers.get('Content-Length'):
+                                info.update(await get_speed_with_download(uri, session, timeout))
+                            raise Exception("Invalid m3u8")
+                        m3u8_obj = m3u8.load(uri, timeout=2)
+                        segments = m3u8_obj.segments
+                    if not segments:
+                        raise Exception("Segments not found")
+                    ts_urls = [segment.absolute_uri for segment in segments]
+                    speed_list = []
+                    start_time = time()
+                    for ts_url in ts_urls:
+                        if time() - start_time > timeout:
+                            break
+                        download_info = await get_speed_with_download(ts_url, session, timeout)
+                        speed_list.append(download_info['speed'])
+                        if info['delay'] is None and download_info['delay'] is not None:
+                            info['delay'] = download_info['delay']
+                    info['speed'] = (sum(speed_list) / len(speed_list)) if speed_list else 0
     except:
         pass
     finally:
