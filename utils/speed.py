@@ -411,7 +411,8 @@ def sort_urls(name, data, supply=config.open_supply, filter_speed=config.open_fi
                         )
                 except Exception as e:
                     print(e)
-                if (not supply and filter_speed and avg_speed < min_speed) or (
+                # 速度太低的不用开启补偿模式，分辨率低的可以开启补偿，将就使用一下
+                if (filter_speed and avg_speed < min_speed) or (
                         not supply and filter_resolution and get_resolution_value(resolution) < min_resolution) or (
                         supply and avg_delay < 0):
                     continue
